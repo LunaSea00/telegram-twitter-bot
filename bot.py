@@ -23,10 +23,11 @@ class TwitterBot:
         self.twitter_access_token = os.getenv('TWITTER_ACCESS_TOKEN')
         self.twitter_access_token_secret = os.getenv('TWITTER_ACCESS_TOKEN_SECRET')
         self.twitter_bearer_token = os.getenv('TWITTER_BEARER_TOKEN')
+        self.authorized_user_id = os.getenv('AUTHORIZED_USER_ID')
         
         if not all([self.telegram_token, self.twitter_api_key, self.twitter_api_secret, 
                    self.twitter_access_token, self.twitter_access_token_secret, 
-                   self.twitter_bearer_token]):
+                   self.twitter_bearer_token, self.authorized_user_id]):
             raise ValueError("Missing required environment variables")
         
         self.twitter_client = tweepy.Client(
@@ -38,13 +39,24 @@ class TwitterBot:
             wait_on_rate_limit=True
         )
     
+    def is_authorized_user(self, user_id: int) -> bool:
+        return str(user_id) == self.authorized_user_id
+    
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self.is_authorized_user(update.effective_user.id):
+            await update.message.reply_text("❌ 你没有权限使用此机器人。")
+            return
+            
         await update.message.reply_text(
             "你好！发送任何消息给我，我会自动转发到你的Twitter账户。\n\n"
             "使用 /help 查看帮助信息。"
         )
     
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self.is_authorized_user(update.effective_user.id):
+            await update.message.reply_text("❌ 你没有权限使用此机器人。")
+            return
+            
         help_text = """
         使用方法：
         1. 直接发送文本消息 - 将会发布到Twitter
@@ -56,6 +68,10 @@ class TwitterBot:
         await update.message.reply_text(help_text)
     
     async def tweet_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self.is_authorized_user(update.effective_user.id):
+            await update.message.reply_text("❌ 你没有权限使用此机器人。")
+            return
+            
         try:
             message_text = update.message.text
             

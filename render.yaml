@@ -22,3 +22,5 @@ services:
         sync: false
       - key: TWITTER_BEARER_TOKEN
         sync: false
+      - key: AUTHORIZED_USER_ID
+        sync: false
