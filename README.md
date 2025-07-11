@@ -55,29 +55,46 @@ docker build -t telegram-twitter-bot .
 docker run -d --name telegram-bot --env-file .env telegram-twitter-bot
 ```
 
-## 部署到Railway
+## 部署到Fly.io
 
-### 1. 准备部署
-1. 将代码推送到GitHub仓库
-2. 访问 [Railway](https://railway.app/)
-3. 注册并连接GitHub账户
+### 1. 安装Fly CLI
+```bash
+# macOS/Linux
+curl -L https://fly.io/install.sh | sh
 
-### 2. 创建项目
-1. 点击"New Project"
-2. 选择"Deploy from GitHub repo"
-3. 选择你的仓库
+# Windows
+powershell -Command "iwr https://fly.io/install.ps1 -useb | iex"
+```
+
+### 2. 登录并初始化
+```bash
+# 登录Fly.io
+fly auth login
+
+# 在项目目录中初始化（可选，已有fly.toml）
+fly launch --no-deploy
+```
 
 ### 3. 配置环境变量
-在Railway项目设置中添加以下环境变量：
-- `TELEGRAM_BOT_TOKEN`
-- `TWITTER_API_KEY`
-- `TWITTER_API_SECRET`
-- `TWITTER_ACCESS_TOKEN`
-- `TWITTER_ACCESS_TOKEN_SECRET`
-- `TWITTER_BEARER_TOKEN`
+```bash
+fly secrets set TELEGRAM_BOT_TOKEN=你的telegram_bot_token
+fly secrets set TWITTER_API_KEY=你的twitter_api_key
+fly secrets set TWITTER_API_SECRET=你的twitter_api_secret
+fly secrets set TWITTER_ACCESS_TOKEN=你的twitter_access_token
+fly secrets set TWITTER_ACCESS_TOKEN_SECRET=你的twitter_access_token_secret
+fly secrets set TWITTER_BEARER_TOKEN=你的twitter_bearer_token
+```
 
 ### 4. 部署
-Railway会自动检测Dockerfile并进行部署。
+```bash
+fly deploy
+```
+
+### 5. 查看状态
+```bash
+fly status
+fly logs
+```
 
 ## 使用方法
 1. 在Telegram中找到你的机器人

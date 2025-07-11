@@ -1,6 +1,8 @@
 import os
 import logging
 import tweepy
+import asyncio
+from aiohttp import web
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -74,16 +76,47 @@ class TwitterBot:
             logger.error(f"发送推文时出错: {e}")
             await update.message.reply_text(f"❌ 发送推文失败: {str(e)}")
     
-    def run(self):
+    async def run(self):
+        # 设置Telegram bot
         application = Application.builder().token(self.telegram_token).build()
         
         application.add_handler(CommandHandler("start", self.start))
         application.add_handler(CommandHandler("help", self.help))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.tweet_message))
         
+        # 设置健康检查服务器
+        async def health_check(request):
+            return web.Response(text="OK", status=200)
+        
+        app = web.Application()
+        app.router.add_get("/health", health_check)
+        app.router.add_get("/", health_check)
+        
+        # 启动HTTP服务器
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", 8000)
+        await site.start()
+        
+        logger.info("健康检查服务器启动在端口8000...")
         logger.info("Bot开始运行...")
-        application.run_polling()
+        
+        # 启动Telegram bot
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        
+        # 保持运行
+        try:
+            await asyncio.Event().wait()
+        except KeyboardInterrupt:
+            logger.info("收到停止信号...")
+        finally:
+            await application.updater.stop()
+            await application.stop()
+            await application.shutdown()
+            await runner.cleanup()
 
 if __name__ == "__main__":
     bot = TwitterBot()
-    bot.run()
+    asyncio.run(bot.run())
