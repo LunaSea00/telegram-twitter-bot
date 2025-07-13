@@ -2,6 +2,7 @@ import os
 import logging
 import tweepy
 import asyncio
+import aiohttp
 from aiohttp import web
 from dotenv import load_dotenv
 from telegram import Update
@@ -24,20 +25,27 @@ class TwitterBot:
         self.twitter_access_token_secret = os.getenv('TWITTER_ACCESS_TOKEN_SECRET')
         self.twitter_bearer_token = os.getenv('TWITTER_BEARER_TOKEN')
         self.authorized_user_id = os.getenv('AUTHORIZED_USER_ID')
+        self.app_url = os.getenv('APP_URL')  # 添加应用URL环境变量
         
         if not all([self.telegram_token, self.twitter_api_key, self.twitter_api_secret, 
                    self.twitter_access_token, self.twitter_access_token_secret, 
                    self.twitter_bearer_token, self.authorized_user_id]):
             raise ValueError("Missing required environment variables")
         
-        self.twitter_client = tweepy.Client(
-            bearer_token=self.twitter_bearer_token,
-            consumer_key=self.twitter_api_key,
-            consumer_secret=self.twitter_api_secret,
-            access_token=self.twitter_access_token,
-            access_token_secret=self.twitter_access_token_secret,
-            wait_on_rate_limit=True
-        )
+        # 初始化Twitter客户端，但不在启动时测试连接
+        try:
+            self.twitter_client = tweepy.Client(
+                bearer_token=self.twitter_bearer_token,
+                consumer_key=self.twitter_api_key,
+                consumer_secret=self.twitter_api_secret,
+                access_token=self.twitter_access_token,
+                access_token_secret=self.twitter_access_token_secret,
+                wait_on_rate_limit=True
+            )
+            logger.info("Twitter客户端初始化成功")
+        except Exception as e:
+            logger.error(f"Twitter客户端初始化失败: {e}")
+            self.twitter_client = None
     
     def is_authorized_user(self, user_id: int) -> bool:
         return str(user_id) == self.authorized_user_id
@@ -71,6 +79,10 @@ class TwitterBot:
         if not self.is_authorized_user(update.effective_user.id):
             await update.message.reply_text("❌ 你没有权限使用此机器人。")
             return
+        
+        if not self.twitter_client:
+            await update.message.reply_text("❌ Twitter API未正确配置，请检查环境变量。")
+            return
             
         try:
             message_text = update.message.text
@@ -90,7 +102,31 @@ class TwitterBot:
             
         except Exception as e:
             logger.error(f"发送推文时出错: {e}")
-            await update.message.reply_text(f"❌ 发送推文失败: {str(e)}")
+            error_msg = str(e)
+            if "401" in error_msg or "Unauthorized" in error_msg:
+                await update.message.reply_text("❌ Twitter API认证失败，请检查API密钥和权限设置。")
+            else:
+                await update.message.reply_text(f"❌ 发送推文失败: {error_msg}")
+    
+    async def keep_alive(self):
+        """自动保活任务，每14分钟ping一次健康检查端点"""
+        if not self.app_url:
+            logger.info("未设置APP_URL，跳过自动保活")
+            return
+            
+        while True:
+            try:
+                await asyncio.sleep(14 * 60)  # 14分钟
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(f"{self.app_url}/health") as response:
+                        if response.status == 200:
+                            logger.info("保活ping成功")
+                        else:
+                            logger.warning(f"保活ping失败，状态码: {response.status}")
+            except Exception as e:
+                logger.error(f"保活ping出错: {e}")
+            except asyncio.CancelledError:
+                break
     
     async def run(self):
         # 设置Telegram bot
@@ -117,6 +153,12 @@ class TwitterBot:
         logger.info("健康检查服务器启动在端口8000...")
         logger.info("Bot开始运行...")
         
+        # 启动自动保活任务
+        keep_alive_task = None
+        if self.app_url:
+            keep_alive_task = asyncio.create_task(self.keep_alive())
+            logger.info("自动保活任务已启动")
+        
         # 启动Telegram bot
         await application.initialize()
         await application.start()
@@ -128,6 +170,12 @@ class TwitterBot:
         except KeyboardInterrupt:
             logger.info("收到停止信号...")
         finally:
+            if keep_alive_task:
+                keep_alive_task.cancel()
+                try:
+                    await keep_alive_task
+                except asyncio.CancelledError:
+                    pass
             await application.updater.stop()
             await application.stop()
             await application.shutdown()
