@@ -39,7 +39,15 @@ pip install -r requirements.txt
 1. 复制 `.env.example` 为 `.env`
 2. 填入你的API密钥
 
-### 5. 运行机器人
+### 5. 配置Twitter私信接收（可选）
+如果需要接收Twitter私信：
+1. 在Twitter Developer Portal中配置webhook URL：
+   - Webhook URL: `https://your-domain.com/webhook/twitter`
+   - 设置webhook secret并添加到环境变量
+2. 确保你的应用有私信权限
+3. 测试webhook连接
+
+### 6. 运行机器人
 
 #### 本地运行
 ```bash
@@ -55,54 +63,23 @@ docker build -t telegram-twitter-bot .
 docker run -d --name telegram-bot --env-file .env telegram-twitter-bot
 ```
 
-## 部署到Fly.io
-
-### 1. 安装Fly CLI
-```bash
-# macOS/Linux
-curl -L https://fly.io/install.sh | sh
-
-# Windows
-powershell -Command "iwr https://fly.io/install.ps1 -useb | iex"
-```
-
-### 2. 登录并初始化
-```bash
-# 登录Fly.io
-fly auth login
-
-# 在项目目录中初始化（可选，已有fly.toml）
-fly launch --no-deploy
-```
-
-### 3. 配置环境变量
-```bash
-fly secrets set TELEGRAM_BOT_TOKEN=你的telegram_bot_token
-fly secrets set TWITTER_API_KEY=你的twitter_api_key
-fly secrets set TWITTER_API_SECRET=你的twitter_api_secret
-fly secrets set TWITTER_ACCESS_TOKEN=你的twitter_access_token
-fly secrets set TWITTER_ACCESS_TOKEN_SECRET=你的twitter_access_token_secret
-fly secrets set TWITTER_BEARER_TOKEN=你的twitter_bearer_token
-```
-
-### 4. 部署
-```bash
-fly deploy
-```
-
-### 5. 查看状态
-```bash
-fly status
-fly logs
-```
-
 ## 使用方法
 1. 在Telegram中找到你的机器人
 2. 发送 `/start` 开始使用
 3. 直接发送文本消息，机器人会自动转发到Twitter
-4. 使用 `/help` 查看帮助信息
+4. 发送图片（可带文字描述），机器人会上传图片到Twitter
+5. 使用 `/help` 查看帮助信息
+
+## 功能特性
+- ✅ 文本推文发送
+- ✅ 图片推文发送（自动优化压缩）
+- ✅ Twitter私信接收和转发到Telegram
+- ✅ 用户权限验证
+- ✅ 自动保活机制
 
 ## 注意事项
 - 消息长度不能超过280字符
-- 确保Twitter API有发推权限
+- 图片会自动压缩优化以符合Twitter要求
+- 确保Twitter API有发推和私信权限
+- 私信功能需要配置webhook和公网访问
 - 保护好你的API密钥
