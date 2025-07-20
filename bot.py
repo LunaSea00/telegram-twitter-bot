@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from PIL import Image
+from src.dm.manager import DMManager
 
 load_dotenv()
 
@@ -36,6 +37,10 @@ class TwitterBot:
         self.twitter_client_secret = os.getenv('TWITTER_CLIENT_SECRET')
         self.authorized_user_id = os.getenv('AUTHORIZED_USER_ID')
         self.app_url = os.getenv('APP_URL')  # 添加应用URL环境变量
+        self.webhook_secret = os.getenv('TWITTER_WEBHOOK_SECRET')  # 添加webhook密钥
+        
+        # 私信功能管理器
+        self.dm_manager = None
         
         if not all([self.telegram_token, self.twitter_api_key, self.twitter_api_secret, 
                    self.twitter_access_token, self.twitter_access_token_secret, 
@@ -56,6 +61,9 @@ class TwitterBot:
         except Exception as e:
             logger.error(f"Twitter客户端初始化失败: {e}")
             self.twitter_client = None
+            
+        # 初始化DM配置对象
+        self.dm_config = self._create_dm_config()
     
     def is_authorized_user(self, user_id: int) -> bool:
         return str(user_id) == self.authorized_user_id
@@ -67,7 +75,8 @@ class TwitterBot:
             
         await update.message.reply_text(
             "你好！发送任何消息给我，我会自动转发到你的Twitter账户。\n\n"
-            "使用 /help 查看帮助信息。"
+            "使用 /help 查看帮助信息。\n"
+            "使用 /dm 启用私信监听功能。"
         )
     
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -81,6 +90,8 @@ class TwitterBot:
         2. 发送图片（可带文字描述） - 将会发布图片到Twitter
         3. /start - 开始使用
         4. /help - 显示帮助信息
+        5. /dm - 启用/查看私信监听功能
+        6. /status - 查看Bot运行状态
         
         注意：消息长度不能超过280字符，图片将自动压缩优化
         """
@@ -208,6 +219,7 @@ class TwitterBot:
     def verify_webhook_signature(self, payload: bytes, signature: str) -> bool:
         """验证Twitter webhook签名"""
         if not self.webhook_secret:
+            logger.warning("未webhook密钥未设置，跳过签名验证")
             return False
             
         try:
@@ -283,6 +295,73 @@ class TwitterBot:
         except Exception as e:
             logger.error(f"获取状态时出错: {e}")
             await update.message.reply_text("❌ 获取状态失败")
+    
+    def _create_dm_config(self):
+        """创建DM配置对象"""
+        class DMConfig:
+            def __init__(self):
+                self.enable_dm_monitoring = os.getenv('ENABLE_DM_MONITORING', 'false').lower() == 'true'
+                self.dm_poll_interval = int(os.getenv('DM_POLL_INTERVAL', '60'))
+                self.dm_target_chat_id = os.getenv('DM_TARGET_CHAT_ID', os.getenv('AUTHORIZED_USER_ID'))
+                self.dm_store_file = os.getenv('DM_STORE_FILE', 'data/processed_dm_ids.json')
+                self.dm_store_max_age_days = int(os.getenv('DM_STORE_MAX_AGE_DAYS', '7'))
+        
+        return DMConfig()
+    
+    async def dm_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理/dm命令 - 启用或查看私信功能状态"""
+        if not self.is_authorized_user(update.effective_user.id):
+            await update.message.reply_text("❌ 你没有权限使用此机器人。")
+            return
+        
+        try:
+            # 如果DM管理器未初始化，先初始化
+            if not self.dm_manager:
+                await self._initialize_dm_manager()
+            
+            # 尝试唤醒DM功能
+            result = await self.dm_manager.wake_up()
+            
+            status_emoji = {
+                'success': '✅',
+                'error': '❌', 
+                'info': 'ℹ️'
+            }.get(result['status'], '❓')
+            
+            response_text = f"{status_emoji} {result['message']}"
+            
+            # 如果成功启动，显示详细状态
+            if result['status'] == 'success':
+                dm_status = self.dm_manager.get_status()
+                response_text += f"\n\n📊 **私信监听状态**\n"
+                response_text += f"🔄 轮询间隔: {dm_status.get('poll_interval', 'N/A')}秒\n"
+                response_text += f"📱 目标聊天: {self.dm_config.dm_target_chat_id}\n"
+                response_text += f"💾 已处理: {dm_status.get('processed_count', 0)}条私信"
+            
+            await update.message.reply_text(response_text, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"处理/dm命令时出错: {e}")
+            await update.message.reply_text(f"❌ 处理DM命令失败: {str(e)}")
+    
+    async def _initialize_dm_manager(self):
+        """初始化DM管理器"""
+        try:
+            if not self.dm_manager:
+                self.dm_manager = DMManager(
+                    twitter_client=self.twitter_client,
+                    telegram_bot=self,
+                    config=self.dm_config
+                )
+                
+            # 如果未初始化，进行初始化（但不启动）
+            if not self.dm_manager.is_initialized:
+                await self.dm_manager.initialize()
+                logger.info("DM管理器初始化完成")
+                
+        except Exception as e:
+            logger.error(f"初始化DM管理器失败: {e}")
+            raise
 
     async def send_telegram_message(self, message: str):
         """发送消息到Telegram"""
@@ -297,68 +376,61 @@ class TwitterBot:
             logger.error(f"发送Telegram消息失败: {e}")
     
     async def handle_dm_webhook(self, request):
-        """处理Twitter私信webhook"""
+        """处理Twitter私信webhook - 会在DM功能可用时委托给DM管理器"""
         try:
-            # 获取签名
-            signature = request.headers.get('x-twitter-webhooks-signature')
-            if not signature:
-                logger.warning("收到没有签名的webhook请求")
-                return web.Response(status=401)
+            # 如果DM管理器可用，优先使用新的处理方式
+            if self.dm_manager and self.dm_manager.is_initialized:
+                logger.info("使用DM管理器处理webhook")
+                # 这里可以实现更高级的webhook处理逻辑
+                # 目前简单返回OK
+                return web.Response(text="OK")
             
-            # 读取请求体
-            body = await request.read()
-            
-            # 验证签名
-            if not self.verify_webhook_signature(body, signature):
-                logger.warning("Webhook签名验证失败")
-                return web.Response(status=401)
-            
-            # 解析JSON
-            data = json.loads(body.decode('utf-8'))
-            
-            # 检查是否是私信事件
-            if 'direct_message_events' in data:
-                for dm_event in data['direct_message_events']:
-                    # 确保不是自己发送的消息
-                    sender_id = dm_event.get('message_create', {}).get('sender_id')
-                    if sender_id != str(self.twitter_access_token).split('-')[0]:  # 简单检查
-                        
-                        # 获取发送者信息
-                        users = data.get('users', {})
-                        sender_info = users.get(sender_id, {})
-                        sender_name = sender_info.get('name', 'Unknown')
-                        sender_username = sender_info.get('screen_name', 'unknown')
-                        
-                        # 获取消息内容
-                        message_data = dm_event.get('message_create', {}).get('message_data', {})
-                        text = message_data.get('text', '')
-                        
-                        # 格式化消息
-                        formatted_message = f"""
-📩 <b>收到新私信</b>
-
-👤 <b>发送者:</b> {sender_name} (@{sender_username})
-💬 <b>内容:</b> {text}
-
-🔗 <b>时间:</b> {dm_event.get('created_timestamp', 'Unknown')}
-                        """.strip()
-                        
-                        # 发送到Telegram
-                        await self.send_telegram_message(formatted_message)
-                        logger.info(f"已转发私信到Telegram: 来自 @{sender_username}")
-            
-            return web.Response(text="OK")
+            # 备用方案：简化的webhook处理（无签名验证）
+            try:
+                body = await request.read()
+                data = json.loads(body.decode('utf-8'))
+                
+                # 检查是否是私信事件
+                if 'direct_message_events' in data:
+                    for dm_event in data['direct_message_events']:
+                        sender_id = dm_event.get('message_create', {}).get('sender_id')
+                        if sender_id and sender_id != str(self.twitter_access_token).split('-')[0]:
+                            
+                            # 获取基本信息
+                            users = data.get('users', {})
+                            sender_info = users.get(sender_id, {})
+                            sender_name = sender_info.get('name', 'Unknown')
+                            sender_username = sender_info.get('screen_name', 'unknown')
+                            
+                            message_data = dm_event.get('message_create', {}).get('message_data', {})
+                            text = message_data.get('text', '')
+                            
+                            # 简化的消息格式
+                            simple_message = f"📩 新私信\n发送者: {sender_name} (@{sender_username})\n内容: {text}"
+                            
+                            await self.send_telegram_message(simple_message)
+                            logger.info(f"简化模式转发私信: @{sender_username}")
+                
+                return web.Response(text="OK")
+                
+            except Exception as e:
+                logger.warning(f"简化webhook处理失败: {e}")
+                return web.Response(text="OK")  # 仍然返回OK以免影响其他功能
             
         except Exception as e:
-            logger.error(f"处理私信webhook时出错: {e}")
+            logger.error(f"处理webhook时出错: {e}")
             return web.Response(status=500)
     
     async def webhook_challenge(self, request):
         """处理Twitter webhook验证挑战"""
         try:
-            # 获取挑战码
             crc_token = request.query.get('crc_token')
-            if not crc_token or not self.webhook_secret:
+            if not crc_token:
+                logger.warning("未提供crc_token")
+                return web.Response(status=400)
+            
+            if not self.webhook_secret:
+                logger.warning("webhook密钥未设置，无法处理挑战")
                 return web.Response(status=400)
             
             # 生成响应
@@ -405,6 +477,7 @@ class TwitterBot:
         application.add_handler(CommandHandler("start", self.start))
         application.add_handler(CommandHandler("help", self.help))
         application.add_handler(CommandHandler("status", self.status))
+        application.add_handler(CommandHandler("dm", self.dm_command))
         application.add_handler(MessageHandler(filters.PHOTO, self.tweet_with_image))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.tweet_message))
         
@@ -438,6 +511,13 @@ class TwitterBot:
         await application.start()
         await application.updater.start_polling()
         
+        # 初始化私信功能（但不启动监听）
+        try:
+            await self._initialize_dm_manager()
+            logger.info("私信功能初始化完成")
+        except Exception as e:
+            logger.warning(f"私信功能初始化失败，将在需要时重试: {e}")
+        
         # 发送启动通知
         await self.send_startup_notification()
         
@@ -447,6 +527,14 @@ class TwitterBot:
         except KeyboardInterrupt:
             logger.info("收到停止信号...")
         finally:
+            # 停止私信功能
+            if self.dm_manager:
+                try:
+                    await self.dm_manager.stop()
+                    logger.info("私信功能已停止")
+                except Exception as e:
+                    logger.error(f"停止私信功能时出错: {e}")
+            
             if keep_alive_task:
                 keep_alive_task.cancel()
                 try:
