@@ -73,13 +73,17 @@ docker run -d --name telegram-bot --env-file .env telegram-twitter-bot
 ## 功能特性
 - ✅ 文本推文发送
 - ✅ 图片推文发送（自动优化压缩）
-- ✅ Twitter私信接收和转发到Telegram
+- ✅ Twitter私信接收和转发到Telegram（隔离式设计）
 - ✅ 用户权限验证
 - ✅ 自动保活机制
+- ✅ DM功能故障不影响主要功能
+- ✅ 按需启用私信监听（/dm 命令）
 
 ## 注意事项
 - 消息长度不能超过280字符
 - 图片会自动压缩优化以符合Twitter要求
 - 确保Twitter API有发推和私信权限
 - 私信功能需要配置webhook和公网访问
+- 私信API失败不会影响推文发送功能
+- 使用 `/dm` 命令可按需启用私信监听
 - 保护好你的API密钥

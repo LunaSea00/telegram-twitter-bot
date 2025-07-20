@@ -219,7 +219,7 @@ class TwitterBot:
     def verify_webhook_signature(self, payload: bytes, signature: str) -> bool:
         """验证Twitter webhook签名"""
         if not self.webhook_secret:
-            logger.warning("未webhook密钥未设置，跳过签名验证")
+            logger.warning("webhook密钥未设置，跳过签名验证")
             return False
             
         try:
